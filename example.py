@@ -5,7 +5,7 @@ import datetime
 import json
 from elasticsearch import Elasticsearch
 from elasticsearch.exceptions import TransportError
-from utils import parse_commits
+from utils import parse_commits, print_hits, print_hit
 
 tracer = logging.getLogger("elasticsearch.trace")
 tracer.setLevel(logging.INFO)
@@ -257,6 +257,27 @@ def example3():
 @cli.command()
 def example4():
     """
+    Simple Query
+    """
+    client = Elasticsearch()
+    print('Find commits that says "fix" without touching tests:')
+    result = client.search(
+        index="git",
+        body={
+            "query": {
+                "bool": {
+                    "must": {"match": {"description": "fix"}},
+                    "must_not": {"term": {"files": "test_elasticsearch"}},
+                }
+            }
+        },
+    )
+    print_hits(result)
+
+
+@cli.command()
+def example5():
+    """
     Iterate over ALL results of a query.
 
     Sometimes we have a lot of data that returns from a particular query. We
@@ -277,14 +298,18 @@ def example4():
 
     results = scan(
         client,
-        query={"query": {"term": {"repository": "elasticsearch-py"}}},
+        query={
+            "query": {
+                "bool": {
+                    "must": {"match": {"description": "fix"}},
+                    "must_not": {"term": {"files": "test_elasticsearch"}},
+                }
+            }
+        },
         index="git",
-        size=100,
     )
     for result in results:
-        print(
-            f"Commit: {result['_id']} commited on {result['_source']['committed_date']} by {result['_source']['committer']['name']}"
-        )
+        print_hit(result)
 
 
 if __name__ == "__main__":
