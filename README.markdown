@@ -1,6 +1,11 @@
-This assumes you have Docker installed.
+# Elasticsearch Python Client Examples
 
-Before you get started with the examples, please start the elasticsearch container using
-the proided `start_elasticsearch.sh` script.
+## Setup
 
-Then you can use the provided `run_example` script to iterate through all the examples.
+1. Make sure you have Docker installed.
+2. run the `start_elasticsearch.sh` script. Make sure ES is running before continuing.
+  * You may have to alter your [system settings](https://www.elastic.co/guide/en/elasticsearch/reference/current/docker.html#docker-cli-run-prod-mode) to account for the `vm.max_map_count`
+
+## Getting started
+
+All you have to do is run the command `./run_example` and follow the help.
