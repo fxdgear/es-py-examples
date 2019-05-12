@@ -2,7 +2,7 @@ import git
 import click
 import logging
 import datetime
-
+import json
 from elasticsearch import Elasticsearch
 from elasticsearch.exceptions import TransportError
 from utils import parse_commits
@@ -27,7 +27,7 @@ def cli():
 
     \b
     Then you can run the example.
-        ./run_example example1 --help
+        ./run_example example1
 
     Each example is idempotent, which means you
     can run these examples over and over again.
@@ -107,7 +107,8 @@ def example1():
     }
 
     # create empty index
-    print("Creating index named `git`...")
+    print("Creating index named `git` with following settings:")
+    print(json.dumps(create_index_body, indent=4))
     try:
         client.indices.create(index="git", body=create_index_body)
     except TransportError as e:
@@ -123,6 +124,25 @@ def example1():
 def example2():
     """
     Process commits and index into our index.
+
+    In this example we're using a function `parse_commits` to parse our commits and
+    create a json repersentation of the data for indexing into ES.
+
+    Streaming bulk consumes actions from the iterable passed in and yields
+    results per action.
+
+    \b
+    How we use streaming_bulk:
+    * First we need a `client` object.
+    * Next we need an interable. Any iterable will work. A list, a dictionary, or
+    in this case a generator.
+        A generator is an object that can be looped over and will `yield` the next computed result without
+        having to compute all results and store them in memory.
+    * Next an `index` to index the data into
+    * And finally a `chunk_size`. Which is how many items we want our bulk requests to send.
+
+    In our example, after each bulk request we will print out the results of each request.
+
     """
     client = Elasticsearch()
     repo_name = "elasticsearch-py"
@@ -141,13 +161,130 @@ def example2():
     ):
         action, result = result.popitem()
         _id = result["_id"]
-        doc_id = f"/git/doc/{_id}"
+        doc_id = f"/git/_doc/{_id}"
         # process the information from ES whether the document has been
         # successfully indexed
         if not ok:
             print(f"Failed to {action} document {doc_id}: {result}")
         else:
             print(doc_id)
+
+    # We need to update a few documents for ease of use in later examples
+    UPDATES = [
+        {
+            "_type": "_doc",
+            "_id": "20fbba1230cabbc0f4644f917c6c2be52b8a63e8",
+            "_op_type": "update",
+            "doc": {"initial_commit": True},
+        },
+        {
+            "_type": "_doc",
+            "_id": "ae0073c8ca7e24d237ffd56fba495ed409081bf4",
+            "_op_type": "update",
+            "doc": {"release": "5.0.0"},
+        },
+    ]
+
+    success, _ = bulk(client, UPDATES, index="git")
+    print(f"Performed {success} actions")
+    client.indices.refresh(index="git")
+
+    initial_commit = client.get(
+        index="git", id="20fbba1230cabbc0f4644f917c6c2be52b8a63e8"
+    )
+    print(f"{initial_commit['_id']}: {initial_commit['_source']['committed_date']}")
+
+    # and now we can count the documents
+    print(client.count(index="git")["count"], "documents in index")
+
+
+@cli.command()
+def example3():
+    """
+    Load documents into ES from a CSV.
+
+    Lets say we have a CSV file with data that we want to index.
+    This CSV is structured in a way that there's a "header" row at the top
+    the second row is the "data type" and the rest of the rows are just data.
+    """
+    import csv
+    from elasticsearch.helpers import bulk
+
+    client = Elasticsearch()
+
+    with open("cars.csv") as csvfile:
+        reader = csv.DictReader(csvfile, delimiter=";")
+        header = reader.fieldnames
+        types = next(reader)
+        create_index_body = {
+            "settings": {
+                # just one shard, no replicas for testing
+                "number_of_shards": 1,
+                "number_of_replicas": 0,
+                # custom analyzer for analyzing file paths
+            },
+            "mappings": {"properties": {}},
+        }
+
+        for field_name, ftype in types.items():
+            if ftype == "STRING":
+                mapping_type = "text"
+            elif ftype == "CAT":
+                mapping_type = "keyword"
+            elif ftype == "INT":
+                mapping_type = "integer"
+            elif ftype == "DOUBLE":
+                mapping_type = "double"
+
+            create_index_body["mappings"]["properties"][field_name] = {
+                "type": mapping_type
+            }
+        # create empty index
+        print("Creating index named `cars`...")
+        try:
+            client.indices.create(index="cars", body=create_index_body)
+        except TransportError as e:
+            # ignore already existing index
+            if e.error == "resource_already_exists_exception":
+                pass
+            else:
+                raise
+
+        ret = bulk(client, reader, index="cars")
+        print(f"Indexed {ret[0]}, {len(ret[1])} errored")
+
+
+@cli.command()
+def example4():
+    """
+    Iterate over ALL results of a query.
+
+    Sometimes we have a lot of data that returns from a particular query. We
+    sometimes also want to see every single result. The Elasticsearch `scan`
+    api is perfect for this. The python client offers a simple way to iterate
+    over all your scroll results using the `scan` function.
+
+    \b
+    Your scan function will take at least 3 paramenters:
+    1. client - an instantiated client object.
+    2. query - The query you want to run.
+    3. index - The index to run the query against.
+    """
+    import csv
+    from elasticsearch.helpers import scan
+
+    client = Elasticsearch()
+
+    results = scan(
+        client,
+        query={"query": {"term": {"repository": "elasticsearch-py"}}},
+        index="git",
+        size=100,
+    )
+    for result in results:
+        print(
+            f"Commit: {result['_id']} commited on {result['_source']['committed_date']} by {result['_source']['committer']['name']}"
+        )
 
 
 if __name__ == "__main__":

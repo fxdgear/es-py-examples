@@ -1,5 +1,5 @@
 FROM python:3
-RUN pip install elasticsearch==7.0.1 click GitPython python-dateutil
+RUN pip install elasticsearch==7.0.1 click GitPython python-dateutil ipdb
 RUN git clone https://github.com/elastic/elasticsearch-py.git
 WORKDIR /examples
 COPY . .
