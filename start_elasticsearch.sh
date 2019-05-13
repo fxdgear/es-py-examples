@@ -17,4 +17,4 @@ exec docker run -d \
     -v $SOURCE_DIR/../elasticsearch:/code/elasticsearch \
     -v /tmp:/tmp \
     -p "9200:9200" \
-docker.elastic.co/elasticsearch/elasticsearch-oss:$ES_VERSION
+docker.elastic.co/elasticsearch/elasticsearch:$ES_VERSION

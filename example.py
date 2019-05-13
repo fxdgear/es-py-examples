@@ -5,7 +5,7 @@ import datetime
 import json
 from elasticsearch import Elasticsearch
 from elasticsearch.exceptions import TransportError
-from utils import parse_commits, print_hits, print_hit
+from utils import parse_commits, print_hits, print_hit, print_search_stats
 
 tracer = logging.getLogger("elasticsearch.trace")
 tracer.setLevel(logging.INFO)
@@ -50,21 +50,27 @@ def example1():
     \b
     1. repository: Repository name
       * This should be a keyword field
+
     2. author: The author of the commit
       * This should be both a keyword and a text field. We want full text and keyword on this field
+
     3. authored_date: The date the commit was
       * Datetime field
+
     4. commiter: The person who commited the code on behalf of the author (usually the same person)
       * This should be both a keyword and a text field. We want full text and keyword on this field
+
     5. committed_date: the date of the commit
       * Datetime field
+
     6. parent_shas: the SHA of any parents to this commit.
       * This should be a keyword field
+
     7. description: the commit description
       * We really want full text search on the description
+
     8. files: the files modified by this commit
       * We want full text search on files, but we also want to use a field_path analyzer on this data.
-
     """
 
     client = Elasticsearch()
@@ -110,7 +116,7 @@ def example1():
     print("Creating index named `git` with following settings:")
     print(json.dumps(create_index_body, indent=4))
     try:
-        client.indices.create(index="git", body=create_index_body)
+        resp = client.indices.create(index="git", body=create_index_body)
     except TransportError as e:
         # ignore already existing index
         if e.error == "resource_already_exists_exception":
@@ -123,7 +129,7 @@ def example1():
 @cli.command()
 def example2():
     """
-    Process commits and index into our index.
+    Eample using streaming_bulk.
 
     In this example we're using a function `parse_commits` to parse our commits and
     create a json repersentation of the data for indexing into ES.
@@ -133,6 +139,7 @@ def example2():
 
     \b
     How we use streaming_bulk:
+
     * First we need a `client` object.
     * Next we need an interable. Any iterable will work. A list, a dictionary, or
     in this case a generator.
@@ -206,6 +213,20 @@ def example3():
     Lets say we have a CSV file with data that we want to index.
     This CSV is structured in a way that there's a "header" row at the top
     the second row is the "data type" and the rest of the rows are just data.
+
+    \b
+    Car;MPG;Cylinders;Displacement;Horsepower;Weight;Acceleration;Model;Origin
+    STRING;DOUBLE;INT;DOUBLE;DOUBLE;DOUBLE;DOUBLE;INT;CAT
+    Chevrolet Chevelle Malibu;18.0;8;307.0;130.0;3504.;12.0;70;US
+
+    First step will be to actaully create our index with our mappings.
+    Using `DictReader` we can map elements in our data rows
+    to their field name from the "header" row.
+
+    This allows us to pass our csv reader object into the `bulk` function.
+    The `reader` object is an interable which is what the `bulk` function
+    expects.
+
     """
     import csv
     from elasticsearch.helpers import bulk
@@ -250,6 +271,8 @@ def example3():
             else:
                 raise
 
+        # Pass in the reader object to `bulk` to send the rest of the
+        # data to Elasticsearch.
         ret = bulk(client, reader, index="cars")
         print(f"Indexed {ret[0]}, {len(ret[1])} errored")
 
@@ -258,6 +281,17 @@ def example3():
 def example4():
     """
     Simple Query
+
+    Sending a query to Elasticsearch via the python client is straight
+    forward, if you have ever sent a search query to Elasticsearch.
+
+    The `search` method will expect the following parameters:
+
+    \b
+    * `index` - The index we want to query
+    * `body` - The query we want to use, represented as a Python dict.
+        ie:
+            {"query": {}}
     """
     client = Elasticsearch()
     print('Find commits that says "fix" without touching tests:')
@@ -281,16 +315,21 @@ def example5():
     Iterate over ALL results of a query.
 
     Sometimes we have a lot of data that returns from a particular query. We
-    sometimes also want to see every single result. The Elasticsearch `scan`
+    sometimes also want to see every single result. The Elasticsearch `scroll`
     api is perfect for this. The python client offers a simple way to iterate
     over all your scroll results using the `scan` function.
 
     \b
-    Your scan function will take at least 3 paramenters:
-    1. client - an instantiated client object.
-    2. query - The query you want to run.
-    3. index - The index to run the query against.
+    The `scan` function will take at least 3 paramenters:
+    1. `client` - an instantiated client object.
+    2. `query` - The query you want to run.
+    3. `index` - The index to run the query against.
+
+    \b
+    ie:
+        scan(client, index=index_name, query={})
     """
+
     import csv
     from elasticsearch.helpers import scan
 
@@ -310,6 +349,159 @@ def example5():
     )
     for result in results:
         print_hit(result)
+
+
+@cli.command()
+def example6():
+    """
+    Example Aggregation
+
+    Creating an aggregation query in the python client is just as easy
+    as creating a query.
+
+    The search function is exactly the same, except we are going to send
+    an aggregation searh as our `body`.
+
+    Again our `search` method requires at least:
+
+    1. `index` to search
+    2. `body` which is our query to send to Elasticsearch.
+
+    \b
+    ie:
+        body={
+            "size": 0,
+            "aggs": {
+                "committers": {
+                    "terms": {"field": "committer.name.keyword"},
+                    "aggs": {"line_stats": {"stats": {"field": "stats.lines"}}},
+                }
+            },
+
+    """
+
+    client = Elasticsearch()
+    print("Stats for top 10 committers:")
+    result = client.search(
+        index="git",
+        body={
+            "size": 0,
+            "aggs": {
+                "committers": {
+                    "terms": {"field": "committer.name.keyword"},
+                    "aggs": {"line_stats": {"stats": {"field": "stats.lines"}}},
+                }
+            },
+        },
+    )
+
+    print_search_stats(result)
+    for committer in result["aggregations"]["committers"]["buckets"]:
+        print(
+            "%15s: %3d commits changing %6d lines"
+            % (committer["key"], committer["doc_count"], committer["line_stats"]["sum"])
+        )
+    print("=" * 80)
+
+
+@cli.command()
+def example7():
+    """
+    Cluster health
+
+    The low level python client also exposes all the api's that Elasticsearch
+    supports.
+
+    For example we can get our cluster health.
+
+    \b
+        client.cluster.health()
+
+    The `health` function takes all the same parameters that the RESt api
+    takes, so we can get the health of an index with:
+
+    \b
+        client.cluster.health(index="git")
+
+    """
+
+    client = Elasticsearch()
+    print("Cluster health for entire cluser:")
+    print("=" * 40)
+    for key, value in client.cluster.health().items():
+        print(f"\t{key}: {value}")
+
+    client = Elasticsearch()
+    print("\n\nCluster health for `git` index:")
+    print("=" * 40)
+    for key, value in client.cluster.health(index="git").items():
+        print(f"\t{key}: {value}")
+
+
+@cli.command()
+def example8():
+    """
+    Cat API's
+
+    Elasticsearch Cat API's are more useful for CLI tools, BUT you can use
+    them in the Python client if you so choose.
+
+    """
+
+    client = Elasticsearch()
+    print("Cat health example with headers:")
+    print("=" * 80)
+
+    print(
+        client.cat.health(v=True, h="timestamp,status,node.total,active_shards_percent")
+    )
+
+
+@cli.command()
+def example9():
+    """
+    XPack APIs
+
+    Using the SQL api we can query the Elasticsearch cluster using SQL query syntax.
+
+    Using the `query` method we can query our cluster with SQL syntax.
+    \b
+        body={
+            "query": "SELECT description,authored_date FROM git WHERE author.name='Nick Lang' LIMIT 5"
+        }
+
+    Now that we know how to get the data we want we can easily translate our
+    SQL query to Elasticearch DSL using the `translate` funtion, it takes the
+    exact same parameters are our `query` method, except this time it will
+    retun a json object representing our ES DSL query syntax
+
+    """
+    client = Elasticsearch()
+    result = client.xpack.sql.query(
+        body={
+            "query": "SELECT description,authored_date FROM git WHERE author.name='Nick Lang' LIMIT 5"
+        }
+    )
+    columns = result["columns"]
+    rows = result["rows"]
+    print("=" * 80)
+    print("Authored Date            \t| Description")
+    print("=" * 80)
+    for row in rows:
+        print(f"{row[1]}\t| {row[0]}")
+        print("=" * 80)
+
+    result = client.xpack.sql.translate(
+        body={
+            "query": "SELECT description,authored_date FROM git WHERE author.name='Nick Lang' LIMIT 5"
+        }
+    )
+
+    print("=" * 80)
+    print("Translate our SQL query to Elasticearch DSL query syntax")
+    print("=" * 80)
+    print("")
+    print(json.dumps(result, indent=4))
 
 
 if __name__ == "__main__":
