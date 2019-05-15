@@ -114,7 +114,7 @@ def example01():
 
     # create empty index
     print("Creating index named `git` with following settings:")
-    print(json.dumps(create_index_body, indent=4))
+    print(json.dumps(create_index_body, indent=2))
     try:
         resp = client.indices.create(index="git", body=create_index_body)
     except TransportError as e:
@@ -443,9 +443,12 @@ def example08():
     """
     Cat API's
 
-    Elasticsearch Cat API's are more useful for CLI tools, BUT you can use
-    them in the Python client if you so choose.
+    Elasticsearch CAT API's are super useful on the CLI. But they can
+    also be really useful in the python client, if you use the `format=json`
+    parameter.
 
+    You will get back all the pre-formatted in JSON for you which can be really
+    handy to interate over.
     """
 
     client = Elasticsearch()
@@ -453,7 +456,12 @@ def example08():
     print("=" * 80)
 
     print(
-        client.cat.health(v=True, h="timestamp,status,node.total,active_shards_percent")
+        json.dumps(
+            client.cat.health(
+                format="json", h="timestamp,status,node.total,active_shards_percent"
+            ),
+            indent=2,
+        )
     )
 
 
@@ -501,7 +509,7 @@ def example09():
     print("Translate our SQL query to Elasticearch DSL query syntax")
     print("=" * 80)
     print("")
-    print(json.dumps(result, indent=4))
+    print(json.dumps(result, indent=2))
 
 
 @cli.command()
