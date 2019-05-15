@@ -5,7 +5,7 @@ import datetime
 import json
 from elasticsearch import Elasticsearch
 from elasticsearch.exceptions import TransportError
-from utils import parse_commits, print_hits, print_hit, print_search_stats
+from utils import parse_commits, print_hits, print_hit, print_search_stats, pp
 
 tracer = logging.getLogger("elasticsearch.trace")
 tracer.setLevel(logging.INFO)
@@ -37,7 +37,7 @@ def cli():
 
 
 @cli.command()
-def example1():
+def example01():
     """
     Create an index for indexing git commits.
 
@@ -127,7 +127,7 @@ def example1():
 
 
 @cli.command()
-def example2():
+def example02():
     """
     Eample using streaming_bulk.
 
@@ -206,7 +206,7 @@ def example2():
 
 
 @cli.command()
-def example3():
+def example03():
     """
     Load documents into ES from a CSV.
 
@@ -278,7 +278,7 @@ def example3():
 
 
 @cli.command()
-def example4():
+def example04():
     """
     Simple Query
 
@@ -310,7 +310,7 @@ def example4():
 
 
 @cli.command()
-def example5():
+def example05():
     """
     Iterate over ALL results of a query.
 
@@ -352,7 +352,7 @@ def example5():
 
 
 @cli.command()
-def example6():
+def example06():
     """
     Example Aggregation
 
@@ -405,7 +405,7 @@ def example6():
 
 
 @cli.command()
-def example7():
+def example07():
     """
     Cluster health
 
@@ -439,7 +439,7 @@ def example7():
 
 
 @cli.command()
-def example8():
+def example08():
     """
     Cat API's
 
@@ -458,7 +458,7 @@ def example8():
 
 
 @cli.command()
-def example9():
+def example09():
     """
     XPack APIs
 
@@ -502,6 +502,180 @@ def example9():
     print("=" * 80)
     print("")
     print(json.dumps(result, indent=4))
+
+
+@cli.command()
+def example10():
+    """
+    DSL objects for common entities instead of dict/json.
+    All importable from elasticsearch_dsl
+    """
+    from elasticsearch_dsl import Q, Search
+
+    """
+    Straightforward mapping to json - kwargs are translated into keys into json.
+    You can use the to_dict() method to see the result json.
+    """
+
+    q = Q("terms", tags=["python", "search"])
+    q.to_dict()
+
+    """
+    All objects can also be constructed using the raw dict.
+    """
+
+    q = Q({"terms": {"tags": ["python", "search"]}})
+    q.to_dict()
+
+    """
+    Query objects support logical operators which result in bool queries
+    """
+    q = q | Q("match", title="python")
+    q.to_dict()
+
+    """
+    DSL objects also allow for attribute access instead of ['key']
+    """
+    q.minimum_should_match = 2
+    q.minimum_should_match
+    q.to_dict()
+
+    from datetime import date
+
+    q = q & Q("range", **{"@timestamp": {"lt": date(2019, 1, 1)}})
+    q.to_dict()
+
+    """
+    Configuration is global so no client needs to be passed around.
+    """
+    from elasticsearch_dsl import connections
+
+    """
+    Default connection used where no other connection specified. Any configuration
+    methods just pass all parameters to the underlying elasticsearch-py client.
+    """
+    connections.create_connection(hosts=["localhost"])
+
+    """
+    Optionally specify an alias for the connection in case of multiple connections.
+    """
+    connections.create_connection("prod", hosts=["localhost"])
+    s = Search(using="prod")
+    s.count()
+
+    """
+    You can always just pass in your own client instance
+    """
+    s = Search(using=Elasticsearch())
+    s.count()
+
+    """
+    Any method on Search returns a clone so you need to always assign it back to
+    the same variable.
+    """
+    s = Search()
+    s = s.params(q="fix")
+
+    """
+    Multiple queries are combined together using the AND operator
+    """
+    s = Search()
+    s = s.query("match", description="fix")
+    s = s.query("match", author="Honza")
+
+    """
+    Filter shortcut to use {bool: {filter: []}}
+    """
+    s = s.filter("range", committed_date={"lt": date(2016, 1, 1)})
+    s.to_dict()
+
+    """
+    Exclude as a wrapper around must_not, use __ instead of dots for convenience.
+    """
+    s = s.exclude("term", committer__name__keyword="Honza Král")
+
+    """
+    Search is executed when iterated on or when .execute() is called.
+    """
+    for hit in s:
+        """
+        Hit class offers direct access to fields and via .meta any other properties
+        on the returned hit (_id, _seq_no, ...)
+        """
+        print(f"{hit.meta.id[:6]} ({hit.author.name}): {hit.description[:50]}")
+
+    """
+    Aggregations are implemented in place to allow for chaining
+    """
+    s = Search(index="git")
+    s.aggs.bucket("tags", "terms", field="terms").metric(
+        "lines", "sum", field="stats.lines"
+    ).metric("authors", "cardinality", field="author.name.keyword")
+    r = s.execute()
+
+    """
+    Or modify aggregation in place
+    """
+    s.aggs["tags"].bucket(
+        "months", "date_histogram", field="committed_date", interval="month"
+    )
+
+    """
+    Analysis
+    """
+
+    from elasticsearch_dsl import analyzer, token_filter
+
+    a = analyzer(
+        "file_analyzer",
+        tokenizer="path_hierarchy",
+        filter=[
+            "lowercase",
+            token_filter(
+                "split_ext",
+                "pattern_capture",
+                preserve_original=True,
+                patterns=[r"^([^\.]+)"],
+            ),
+        ],
+    )
+
+    a.simulate("test/integration/search.py")
+
+    """
+    """
+
+    from elasticsearch_dsl import Document, Text, Keyword, InnerDoc, Date, Nested
+
+    class FileDiff(InnerDoc):
+        filename = Text(analyzer=a)
+        patch = Text()
+
+    class Commit(Document):
+        description = Text()
+        committed_date = Date()
+        author = Text(fields={"keyword": Keyword()})
+
+        files = Nested(FileDiff)
+
+        def subject(self):
+            return self.description.split("\n", 1)[0][:80]
+
+        class Index:
+            name = "git*"
+            settings = {"number_of_replicas": 0}
+
+    """
+    Create the index
+    """
+
+    Commit.init(index="git-v2")
+
+    """
+    Search now returns Commit objects
+    """
+    for c in Commit.search():
+        print(f"{c.meta.id}: {c.subject()}")
 
 
 if __name__ == "__main__":

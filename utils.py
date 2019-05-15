@@ -1,5 +1,6 @@
 from datetime import datetime
 from dateutil.parser import parse as parse_date
+import json
 
 
 def parse_commits(head, name):
@@ -59,4 +60,5 @@ def print_hits(results):
     print("=" * 80)
 
 
-print()
+def pp(d):
+    return json.dumps(d, indent=2)
